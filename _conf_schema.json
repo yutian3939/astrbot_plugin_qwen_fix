@@ -1,0 +1,18 @@
+{
+  "qwen_fix_config": {
+    "type": "object",
+    "description": "Qwen Character 模型修复配置",
+    "items": {
+      "enable_auto_fix": {
+        "type": "bool",
+        "default": true,
+        "description": "是否自动修复 content 字段类型问题"
+      },
+      "log_conversion": {
+        "type": "bool",
+        "default": false,
+        "description": "是否记录每次转换的详细信息（用于调试）"
+      }
+    }
+  }
+}
