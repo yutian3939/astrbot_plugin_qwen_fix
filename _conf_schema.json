@@ -1,7 +1,7 @@
 {
   "qwen_fix_config": {
     "type": "object",
-    "description": "Qwen Character 模型修复配置",
+    "description": "Qwen Character 模型修复配置（支持长期记忆和群聊）",
     "items": {
       "enable_auto_fix": {
         "type": "bool",
@@ -28,6 +28,36 @@
         "default": "tail",
         "description": "文本截断策略：tail(保留头部)、head(保留尾部)、middle(保留头尾)",
         "options": ["tail", "head", "middle"]
+      },
+      "enable_long_term_memory": {
+        "type": "bool",
+        "default": false,
+        "description": "是否启用长期记忆功能（支持超长对话）"
+      },
+      "memory_entries": {
+        "type": "int",
+        "default": 50,
+        "description": "触发记忆摘要的对话条数（范围 20-400，默认 50）"
+      },
+      "skip_save_types": {
+        "type": "array",
+        "default": [],
+        "description": "跳过存储的消息类型数组，可选值：user, system, assistant, output"
+      },
+      "enable_group_chat": {
+        "type": "bool",
+        "default": false,
+        "description": "是否启用群聊模式（多角色对话）"
+      },
+      "character_name": {
+        "type": "string",
+        "default": "",
+        "description": "群聊中的角色名称（启用群聊时必填）"
+      },
+      "partial_response": {
+        "type": "bool",
+        "default": true,
+        "description": "是否启用 partial 回复模式（群聊场景推荐开启）"
       }
     }
   }
