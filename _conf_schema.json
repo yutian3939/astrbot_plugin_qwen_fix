@@ -40,9 +40,12 @@
         "description": "触发记忆摘要的对话条数（范围 20-400，默认 50）"
       },
       "skip_save_types": {
-        "type": "array",
+        "type": "list",
         "default": [],
-        "description": "跳过存储的消息类型数组，可选值：user, system, assistant, output"
+        "description": "跳过存储的消息类型数组，可选值：user, system, assistant, output",
+        "items": {
+          "type": "string"
+        }
       },
       "enable_group_chat": {
         "type": "bool",
