@@ -45,9 +45,43 @@ Input error. Input should be a valid string: messages.content at index 1.
    - 忽略思考过程（think 部分）
    - 图片等多媒体内容转为占位符（如 `[image_url]`）
 
-## 配置说明
+## ⚙️ 配置说明
 
-本插件无需配置，开箱即用。
+在 AstrBot WebUI 的插件配置页面，可以调整以下参数：
+
+```json
+{
+  "qwen_fix_config": {
+    "enable_auto_fix": true,              // 是否启用自动修复（默认 true）
+    "log_conversion": false,               // 是否记录详细转换日志（默认 false，用于调试）
+    "max_input_length_flash": 7500,        // qwen-flash-character 最大长度（模型限制 8000）
+    "max_input_length_plus": 30000,        // qwen-plus-character 最大长度（模型限制 32000）
+    "truncate_strategy": "tail"            // 文本截断策略（当超过最大长度时）
+                                           // - "tail": 保留头部，截断尾部（默认）
+                                           // - "head": 截断头部，保留尾部
+                                           // - "middle": 保留头尾，截断中间
+  }
+}
+```
+
+### 配置项说明
+
+- **enable_auto_fix**: 控制是否启用自动修复功能。禁用后插件不会处理任何请求。
+- **log_conversion**: 开启后会记录详细的转换过程日志，用于调试和排查问题。
+- **max_input_length_flash**: qwen-flash-character 模型的输入长度限制。官方限制为 8000 Token，插件默认设置为 7500 以留出余量。
+- **max_input_length_plus**: qwen-plus-character 模型的输入长度限制。官方限制为 32000 Token，插件默认设置为 30000 以留出余量。
+- **truncate_strategy**: 当转换后的文本超过最大长度时，采用不同的截断策略：
+  - `tail`: 保留文本头部，截断尾部（推荐用于对话场景）
+  - `head`: 截断头部，保留尾部
+  - `middle`: 保留头尾部分，截断中间内容
+
+### 智能识别机制
+
+插件会**自动识别**当前使用的模型类型，并应用相应的长度限制：
+- 检测到 `qwen-flash-character` → 使用 `max_input_length_flash` (默认 7500)
+- 检测到 `qwen-plus-character` → 使用 `max_input_length_plus` (默认 30000)
+
+无需手动切换配置，插件会根据模型名称自动匹配！
 
 ## 注意事项
 
@@ -56,7 +90,7 @@ Input error. Input should be a valid string: messages.content at index 1.
 3. 使用高优先级（priority=100）确保在其他钩子之前执行
 4. 转换后的文本会保留所有原始文本内容，不会丢失信息
 
-## 故障排除
+## 🔧 故障排除
 
 ### 插件未生效
 
@@ -71,8 +105,71 @@ Input error. Input should be a valid string: messages.content at index 1.
 1. 日志中是否有详细的错误信息
 2. 确认使用的模型名称是否正确
 3. 尝试重启 AstrBot 重新加载插件
+4. **新增**: 检查日志中的长度提示信息，调整对应的 `max_input_length_*` 配置
 
-## 更新日志
+### 常见问题场景
+
+#### 场景 1：输入长度超限错误（flash 模型）
+
+**错误信息**:
+```
+Range of input length should be [1, 8000]
+```
+
+**解决方案**:
+- 插件 v1.1.0+ 会自动检测并截断超长文本
+- 可通过 WebUI 调整 `max_input_length_flash` 配置（不超过 8000）
+- 选择合适的 `truncate_strategy` 策略
+
+#### 场景 2：输入长度超限错误（plus 模型）
+
+**错误信息**:
+```
+Range of input length should be [1, 32000]
+```
+
+**解决方案**:
+- 插件 v1.1.0+ 会自动检测并截断超长文本
+- 可通过 WebUI 调整 `max_input_length_plus` 配置（不超过 32000）
+- 选择合适的 `truncate_strategy` 策略
+
+#### 场景 3：转换后内容不完整
+
+**原因**: 文本超过最大长度限制被截断
+
+**解决方案**:
+1. 增加对应的 `max_input_length_*` 值（但不超过模型限制）
+2. 使用 `middle` 策略保留更多上下文
+3. 优化输入内容，减少冗余信息
+
+### 如何知道当前使用的是哪个模型？
+
+查看日志输出：
+```
+[INFO] qwen-character fix 插件：检测到模型=qwen-flash-character
+[INFO] qwen-character fix 插件：使用最大长度限制=7500 (基于模型类型)
+```
+
+日志会明确显示当前识别的模型类型和应用的长度限制。
+
+## 📝 更新日志
+
+### v1.2.0 (2026-03-14) - 基于 Qwen-Character 文档优化
+
+- ✨ **智能模型识别**: 自动识别 qwen-flash-character 和 qwen-plus-character，应用不同的长度限制
+- ⚙️ **独立配置**: 为不同模型提供独立的长度限制配置项
+  - `max_input_length_flash`: 7500（官方限制 8000）
+  - `max_input_length_plus`: 30000（官方限制 32000）
+- 📊 **精准控制**: 根据模型类型自动匹配最佳配置，无需手动切换
+- 📝 **增强日志**: 记录当前使用的模型类型和应用的长度限制
+
+### v1.1.0 (2026-03-14)
+
+- ✨ **新增长度控制功能**: 添加最大输入长度限制，防止超出模型 8000 字符限制
+- 🎯 **多种截断策略**: 支持 tail、head、middle 三种文本截断方式
+- ⚙️ **可配置参数**: 通过 WebUI 可调整最大长度和截断策略
+- 📝 **增强日志记录**: 记录 prompt 长度检查和截断信息
+- 🐛 **优化性能**: 改进文本处理逻辑，减少不必要的长度增长
 
 ### v1.0.0 (2026-03-08)
 

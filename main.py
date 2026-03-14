@@ -33,9 +33,15 @@ class Main(star.Star):
         self.enable_auto_fix = plugin_config.get("enable_auto_fix", True)
         self.log_conversion = plugin_config.get("log_conversion", False)
         
+        # 新增：最大长度限制配置（支持按模型自动识别）
+        # flash 模型默认 7500，plus 模型默认 30000（留出余量）
+        self.max_input_length_flash = plugin_config.get("max_input_length_flash", 7500)
+        self.max_input_length_plus = plugin_config.get("max_input_length_plus", 30000)
+        self.truncate_strategy = plugin_config.get("truncate_strategy", "tail")
+        
         logger.info("qwen-flash-character fix 插件已加载")
         if self.enable_auto_fix:
-            logger.info("自动修复功能已启用")
+            logger.info(f"自动修复功能已启用 (flash 限制：{self.max_input_length_flash}, plus 限制：{self.max_input_length_plus})")
         else:
             logger.warning("自动修复功能已禁用")
 
@@ -72,6 +78,10 @@ class Main(star.Star):
             if "qwen-flash-character" not in model_name and "qwen-plus-character" not in model_name:
                 logger.debug(f"qwen-character fix 插件：模型不匹配，跳过")
                 return
+
+            # 根据模型类型确定最大长度限制
+            max_length = self.max_input_length_plus if "qwen-plus-character" in model_name else self.max_input_length_flash
+            logger.info(f"qwen-character fix 插件：使用最大长度限制={max_length} (基于模型类型)")
 
             logger.info(f"检测到 qwen-character 系列模型 ({model_name})，开始处理 content 字段")
 
@@ -145,6 +155,22 @@ class Main(star.Star):
                     # 清空 extra_user_content_parts，防止 assemble_context 创建 list 类型 content
                     req.extra_user_content_parts = []
                     logger.info("qwen-character fix 插件：已清空 extra_user_content_parts")
+
+            # 3. 新增：检查并控制总长度
+            if req.prompt:
+                prompt_length = len(req.prompt)
+                logger.info(f"qwen-character fix 插件：当前 prompt 长度={prompt_length}")
+                
+                if prompt_length > max_length:
+                    logger.warning(
+                        f"qwen-character fix 插件：prompt 长度 ({prompt_length}) 超过限制 ({max_length})，"
+                        f"将进行截断处理"
+                    )
+                    req.prompt = self._truncate_text(req.prompt, max_length)
+                    logger.info(
+                        f"qwen-character fix 插件：prompt 已截断至 {len(req.prompt)} 字符，"
+                        f"使用策略：{self.truncate_strategy}"
+                    )
 
             logger.info("qwen-character content 字段预处理完成")
 

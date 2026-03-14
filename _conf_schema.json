@@ -12,6 +12,22 @@
         "type": "bool",
         "default": false,
         "description": "是否记录每次转换的详细信息（用于调试）"
+      },
+      "max_input_length_flash": {
+        "type": "int",
+        "default": 7500,
+        "description": "qwen-flash-character 最大输入长度限制（模型限制 8000，建议预留余量）"
+      },
+      "max_input_length_plus": {
+        "type": "int",
+        "default": 30000,
+        "description": "qwen-plus-character 最大输入长度限制（模型限制 32000，建议预留余量）"
+      },
+      "truncate_strategy": {
+        "type": "string",
+        "default": "tail",
+        "description": "文本截断策略：tail(保留头部)、head(保留尾部)、middle(保留头尾)",
+        "options": ["tail", "head", "middle"]
       }
     }
   }
