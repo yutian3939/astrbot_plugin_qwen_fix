@@ -2,7 +2,7 @@ name: astrbot_plugin_qwen_fix
 description: 修复 qwen-flash-character 和 qwen-plus-character 模型 content 字段类型不匹配问题
 author: Assistant
 version: 1.0.0
-repository: https://github.com/AstrBotDevs/AstrBot
+repository: https://github.com/yutian3939/astrbot_plugin_qwen_fix
 tags:
   - fix
   - qwen
