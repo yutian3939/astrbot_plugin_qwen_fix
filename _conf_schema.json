@@ -67,6 +67,11 @@
         "default": false,
         "description": "是否启用 logit_bias 限制输出内容（用于控制模型输出特定词汇）"
       },
+      "disable_action_description": {
+        "type": "bool",
+        "default": false,
+        "description": "是否禁止用括号内的内容表示当前的动作（如：（朝你挥挥手））。启用后会自动配置左右括号的 logit_bias 为 -100"
+      },
       "logit_bias_config": {
         "type": "list",
         "default": [],

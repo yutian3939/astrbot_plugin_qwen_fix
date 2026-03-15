@@ -19,9 +19,10 @@
 - ✅ 支持多条规则同时生效
 - ✅ 完全禁止或降低特定 token 的可能性
 - ✅ 适用于过滤动作描述、括号内容等
+- ✅ **v1.4.1 新增**: 一键开关"禁止括号动作描述"功能
 
 **工作原理**:
-```json
+``json
 {
   "logit_bias": {
     "token_id_1": bias_value_1,
@@ -61,13 +62,89 @@
 }
 ```
 
+**快速配置（v1.4.1 新增）**:
+
+- **disable_action_description**: 一键开关"禁止括号动作描述"功能
+  - 默认 `false`：不启用
+  - 设置为 `true` 时，插件会自动配置左右括号的 logit_bias 为 -100
+  - **推荐使用**：无需查找 token ID，简单快捷
+  
+**使用示例**：
+```json
+{
+  "disable_action_description": true
+}
+```
+
+**高级配置**：
+
+- **enable_logit_bias**: 启用 logit_bias 功能，限制模型输出特定内容
+  - 默认 `false`：不启用
+  - 设置为 `true` 时需要在 `logit_bias_config` 中配置具体规则
+  
+- **logit_bias_config**: logit_bias 配置列表，数组格式
+  - 默认 `[]`：空数组
+  - 每项包含三个字段：
+    - `token_id` (int): Token 对应的 ID（从官方映射表查询）
+    - `bias_value` (int): 概率调整值，范围 `[-100, 100]`
+      - `-100`: 完全禁止该 token 出现
+      - `-1 ~ -99`: 减少出现的可能性
+      - `0`: 无影响（默认）
+      - `1 ~ 99`: 增加出现的可能性
+      - `100`: 强制只选择该 token（❌ 不建议，会导致循环输出）
+    - `description` (string): 备注说明（可选）
+  
+**使用示例**:
+
+``json
+{
+  "enable_logit_bias": true,
+  "logit_bias_config": [
+    {
+      "token_id": 1234,  // 替换为实际的左括号 token ID
+      "bias_value": -100,
+      "description": "禁止输出左括号（"
+    },
+    {
+      "token_id": 5678,  // 替换为实际的右括号 token ID
+      "bias_value": -100,
+      "description": "禁止输出右括号）"
+    },
+    {
+      "token_id": 9012,  // 替换为实际的动作描述 token ID
+      "bias_value": -50,
+      "description": "减少动作描述词汇的使用"
+    }
+  ]
+}
+```
+
+**混合配置（推荐）**：
+
+同时使用快速开关和自定义规则：
+```json
+{
+  "disable_action_description": true,  // 快速禁止括号动作
+  "enable_logit_bias": true,           // 同时启用自定义规则
+  "logit_bias_config": [
+    {
+      "token_id": 9999,
+      "bias_value": -50,
+      "description": "减少某些特定词汇的使用"
+    }
+  ]
+}
+```
+
+插件会合并所有限制规则，同时生效。
+
 **如何获取 Token ID**:
 - 下载阿里云提供的 [logit_bias_id 映射表.json](https://help-static-aliyun-doc.aliyuncs.com/file-manage-files/zh-CN/20250908/xtsxix/logit_bias_id%E6%98%A0%E5%B0%84%E8%A1%A8.json)
 - 查找需要限制的 token 对应的 ID
 - 在插件配置中添加规则
 
 **使用场景**:
-1. **过滤动作描述**: 禁止输出括号内的动作描述
+1. **过滤动作描述**: 禁止输出括号内的动作描述（推荐用一键开关）
 2. **规范输出格式**: 禁止使用某些标点符号或格式
 3. **风格控制**: 减少口语化表达的使用
 4. **专业场景**: 禁止使用非正式词汇
@@ -140,11 +217,12 @@ messages = [
 
 ### ⚙️ 新增配置项
 
-#### 输出内容限制相关（v1.4.0）
+#### 输出内容限制相关（v1.4.0+）
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `enable_logit_bias` | bool | false | 是否启用 logit_bias 限制输出内容 |
+| `disable_action_description` | bool | false | **v1.4.1 新增**：是否禁止用括号内的内容表示当前的动作（如"（朝你挥挥手）"）。启用后会自动配置左右括号的 logit_bias 为 -100 |
 | `logit_bias_config` | array | [] | logit_bias 配置列表，每项包含 token_id、bias_value 和 description |
 
 ##### logit_bias_config 数组元素结构
@@ -167,6 +245,37 @@ messages = [
 | `1 ~ 50` | 增加可能性 | 推荐使用的表达方式 |
 | `51 ~ 99` | 大幅增加可能性 | 强烈推荐的表达方式 |
 | `100` | 强制选择 | ❌ 不建议使用，会导致循环输出 |
+
+##### 快速配置 vs 高级配置
+
+**快速配置（推荐新手）**：
+
+如果只需要禁止括号内的动作描述，只需设置：
+```json
+{
+  "disable_action_description": true
+}
+```
+
+插件会自动处理左右括号的限制，无需手动查找 token ID！
+
+**高级配置（灵活定制）**：
+
+如果需要更精细的控制，可以使用完整的 logit_bias_config：
+```json
+{
+  "enable_logit_bias": true,
+  "logit_bias_config": [
+    {
+      "token_id": 1234,
+      "bias_value": -100,
+      "description": "禁止输出左括号"
+    }
+  ]
+}
+```
+
+**注意**: 两种配置方式可以同时使用，插件会合并所有规则。
 
 ##### 常用 Token ID 参考
 
@@ -260,7 +369,7 @@ messages = [
 
 插件会自动为每个会话生成唯一的 Session ID：
 
-```python
+```
 # Session Key 生成规则
 session_key = f"{platform}_{user_id}"
 session_id = uuid.uuid4()
@@ -274,7 +383,7 @@ session_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 
 插件会自动构建以下配置结构：
 
-```json
+``json
 {
   "character_options": {
     "profile": "角色人设信息...",
@@ -406,7 +515,7 @@ AI：要不要一起去买蓝莓？我记得你最喜欢这个
     "memory_entries": 30,
     "skip_save_types": ["output"]  // 不保存模型输出，节省空间
     
-    // v1.4.0: 限制输出动作描述
+    // v1.4.0: 限制输出动作描述（高级配置方式）
     "enable_logit_bias": true,
     "logit_bias_config": [
       {
@@ -423,6 +532,48 @@ AI：要不要一起去买蓝莓？我记得你最喜欢这个
   }
 }
 ```
+
+#### 配置 4：快速禁止括号动作描述（v1.4.1 推荐）
+
+```json
+{
+  "qwen_fix_config": {
+    "enable_auto_fix": true,
+    "max_input_length_plus": 30000,
+    
+    // v1.4.1 新增：一键开关，无需查找 token ID
+    "disable_action_description": true
+  }
+}
+```
+
+**说明**: 这是最简单的方式！只需设置 `disable_action_description: true`，插件会自动处理左右括号的限制。
+
+#### 配置 5：混合配置（最灵活）
+
+```json
+{
+  "qwen_fix_config": {
+    "enable_auto_fix": true,
+    "max_input_length_plus": 30000,
+    
+    // 快速禁止括号动作
+    "disable_action_description": true,
+    
+    // 同时添加自定义限制规则
+    "enable_logit_bias": true,
+    "logit_bias_config": [
+      {
+        "token_id": 9999,
+        "bias_value": -50,
+        "description": "减少某些口语化表达"
+      }
+    ]
+  }
+}
+```
+
+**说明**: 同时使用快速开关和自定义规则，所有限制会合并生效。
 
 ## 📋 原始功能介绍
 
@@ -690,7 +841,21 @@ Range of input length should be [1, 32000]
 
 **需求**: 不希望模型输出类似"（朝你挥挥手）"这样的动作描述
 
-**解决方案**:
+**快速解决方案（v1.4.1+ 推荐）**：
+
+1. 在 AstrBot WebUI 插件配置中设置：
+```json
+{
+  "disable_action_description": true
+}
+```
+
+2. 保存并重载插件
+
+**效果**: 插件会自动配置左右括号的 logit_bias 为 -100，无需手动查找 token ID！
+
+**高级解决方案**：
+
 1. 下载阿里云提供的 [logit_bias_id 映射表.json](https://help-static-aliyun-doc.aliyuncs.com/file-manage-files/zh-CN/20250908/xtsxix/logit_bias_id%E6%98%A0%E5%B0%84%E8%A1%A8.json)
 2. 查找左右括号对应的 token ID
 3. 在插件配置中添加 logit_bias 规则：
@@ -719,6 +884,12 @@ Range of input length should be [1, 32000]
 
 **注意**: Token ID 需要从官方映射表中查询，不同字符的 ID 可能不同。
 
+**对比**：
+- **快速方案**：一键开关，简单快捷，无需查映射表（推荐新手）
+- **高级方案**：灵活定制，可精确控制特定 token（适合高级用户）
+
+两种方案可以同时使用，所有限制会合并生效！
+
 ### 如何知道当前使用的是哪个模型？
 
 查看日志输出：
@@ -739,7 +910,31 @@ Range of input length should be [1, 32000]
 
 如果看到这些信息，说明长期记忆功能已正常启用。
 
+### 如何知道禁止括号动作描述功能是否在工作？
+
+查看日志输出：
+```
+[INFO] qwen-character fix 插件：禁止括号动作描述功能已启用（自动配置左右括号 logit_bias=-100）
+[INFO] qwen-character fix 插件：已启用禁止括号动作描述，共配置 X 条 logit_bias 规则
+[DEBUG] qwen-character fix 插件：自动添加左括号限制 - token_id=26, bias=-100 (禁止动作描述)
+[DEBUG] qwen-character fix 插件：自动添加右括号限制 - token_id=27, bias=-100 (禁止动作描述)
+```
+
+如果看到这些信息，说明禁止括号动作描述功能已正常启用并自动配置了相关规则。
+
 ## 📝 更新日志
+
+### v1.4.1 (2026-03-15) - 新增一键开关禁止括号动作描述
+
+- ✨ **disable_action_description 开关**: 一键开启/关闭禁止括号动作描述功能
+- 🎯 **自动注入规则**: 启用后自动配置左右括号的 logit_bias 为 -100
+- 🛠️ **新增配置项**: 
+  - `disable_action_description`: 是否禁止用括号内的内容表示当前的动作
+- 📊 **使用场景**: 
+  - 快速过滤动作描述（如"（朝你挥挥手）"）
+  - 无需手动查找 token ID，降低使用门槛
+- 📝 **增强日志**: 记录自动配置的括号限制规则
+- 💡 **兼容性**: 可与自定义 logit_bias_config 同时使用，规则合并生效
 
 ### v1.4.0 (2026-03-15) - 支持输出内容限制（Logit Bias）
 
@@ -857,5 +1052,5 @@ A: 会的。系统会自动清除 365 天内未使用的会话。如需长期保
 ---
 
 **最后更新**: 2026-03-15  
-**当前版本**: v1.4.0  
+**当前版本**: v1.4.1  
 **参考文档**: 阿里云百炼 Qwen-Character 官方文档
