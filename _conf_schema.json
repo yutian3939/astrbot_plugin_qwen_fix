@@ -61,6 +61,35 @@
         "type": "bool",
         "default": true,
         "description": "是否启用 partial 回复模式（群聊场景推荐开启）"
+      },
+      "enable_logit_bias": {
+        "type": "bool",
+        "default": false,
+        "description": "是否启用 logit_bias 限制输出内容（用于控制模型输出特定词汇）"
+      },
+      "logit_bias_config": {
+        "type": "list",
+        "default": [],
+        "description": "logit_bias 配置列表，每项包含 token_id 和 bias_value",
+        "items": {
+          "type": "object",
+          "items": {
+            "token_id": {
+              "type": "int",
+              "description": "Token 对应的 ID（查看 Token 对应 ID 请下载 logit_bias_id 映射表.json）"
+            },
+            "bias_value": {
+              "type": "int",
+              "description": "Token 出现的概率调整值，范围 [-100, 100]。-1 减少可能性，1 增加可能性；-100 完全禁止，100 强制选择（不建议）",
+              "min": -100,
+              "max": 100
+            },
+            "description": {
+              "type": "string",
+              "description": "备注说明（如：'动作描述 - 括号内容'）"
+            }
+          }
+        }
       }
     }
   }

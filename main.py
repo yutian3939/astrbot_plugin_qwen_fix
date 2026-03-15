@@ -8,6 +8,12 @@ API 会返回错误："Input error. Input should be a valid string: messages.con
 解决方案:
 在 LLM 请求前，通过 on_llm_request 钩子检查并转换 content 字段为字符串。
 
+v1.4.0 新增功能:
+- 支持 logit_bias 参数配置（限制模型输出特定内容）
+- 可在管理面板中配置 token 限制规则
+- 支持设置 Token 出现概率（-100 到 100）
+- 适用于过滤动作描述、括号内容等
+
 v1.3.0 新增功能:
 - 支持长期记忆（Long-term Memory）
 - 优化群聊场景（Group Chat）
@@ -15,7 +21,7 @@ v1.3.0 新增功能:
 - 智能上下文截断策略
 
 作者：Assistant
-版本：1.3.0
+版本：1.4.0
 """
 
 from typing import Any, Dict, List
@@ -56,10 +62,14 @@ class Main(star.Star):
         self.character_name = plugin_config.get("character_name", "")  # 角色名称
         self.partial_response = plugin_config.get("partial_response", True)  # 是否启用部分回复
         
+        # v1.4.0 新增：logit_bias 配置（限制输出内容）
+        self.enable_logit_bias = plugin_config.get("enable_logit_bias", False)
+        self.logit_bias_config = plugin_config.get("logit_bias_config", [])
+        
         # Session ID 管理（用于长期记忆）
         self._session_ids: Dict[str, str] = {}
         
-        logger.info("qwen-flash-character fix 插件已加载 (v1.3.0)")
+        logger.info("qwen-flash-character fix 插件已加载 (v1.4.0)")
         if self.enable_auto_fix:
             logger.info(f"自动修复功能已启用 (flash 限制：{self.max_input_length_flash}, plus 限制：{self.max_input_length_plus})")
         else:
@@ -70,6 +80,14 @@ class Main(star.Star):
         
         if self.enable_group_chat:
             logger.info(f"群聊模式已启用 (角色名：{self.character_name})")
+        
+        if self.enable_logit_bias and self.logit_bias_config:
+            logger.info(f"logit_bias 已启用，配置了 {len(self.logit_bias_config)} 条限制规则")
+            for idx, config in enumerate(self.logit_bias_config):
+                token_id = config.get("token_id")
+                bias_value = config.get("bias_value")
+                desc = config.get("description", "")
+                logger.info(f"  规则 {idx+1}: token_id={token_id}, bias={bias_value}, 说明={desc}")
 
     @filter.on_llm_request(priority=100)  # 高优先级，确保在其他钩子之前执行
     async def fix_qwen_content(
@@ -202,7 +220,11 @@ class Main(star.Star):
             # 注：实际配置需要通过 SDK 的 extra_body 传入，此处做预处理
             if self.enable_long_term_memory or self.enable_group_chat:
                 await self._prepare_character_options(event, req, model_name)
-
+            
+            # 5. v1.4.0 新增：应用 logit_bias 配置
+            if self.enable_logit_bias and self.logit_bias_config:
+                self._apply_logit_bias(req)
+            
             logger.info("qwen-character content 字段预处理完成")
 
         except Exception as e:
@@ -262,6 +284,58 @@ class Main(star.Star):
             
         except Exception as e:
             logger.error(f"qwen-character fix 插件：准备 character_options 失败：{e}", exc_info=True)
+
+    def _apply_logit_bias(self, req: ProviderRequest) -> None:
+        """
+        应用 logit_bias 配置到请求中
+        
+        Args:
+            req: 请求对象
+        """
+        try:
+            if not self.logit_bias_config:
+                logger.debug("qwen-character fix 插件：logit_bias 配置为空，跳过")
+                return
+            
+            # 构建 logit_bias 字典
+            logit_bias_dict = {}
+            for config in self.logit_bias_config:
+                token_id = config.get("token_id")
+                bias_value = config.get("bias_value")
+                desc = config.get("description", "")
+                
+                if token_id is not None and bias_value is not None:
+                    # 验证 bias_value 范围
+                    if bias_value < -100 or bias_value > 100:
+                        logger.warning(
+                            f"qwen-character fix 插件：logit_bias 值超出范围 [{bias_value}], "
+                            f"已自动修正为最接近的有效值"
+                        )
+                        bias_value = max(-100, min(100, bias_value))
+                    
+                    logit_bias_dict[str(token_id)] = bias_value
+                    logger.debug(
+                        f"qwen-character fix 插件：添加 logit_bias 规则 - "
+                        f"token_id={token_id}, bias={bias_value}, 说明={desc}"
+                    )
+            
+            if logit_bias_dict:
+                # 将 logit_bias 添加到 req.extra_body 中
+                # 注：需要 provider 支持 extra_body 参数
+                if not hasattr(req, 'extra_body') or req.extra_body is None:
+                    req.extra_body = {}
+                
+                req.extra_body['logit_bias'] = logit_bias_dict
+                
+                logger.info(
+                    f"qwen-character fix 插件：已应用 {len(logit_bias_dict)} 条 logit_bias 规则 "
+                    f"(通过 extra_body 传入)"
+                )
+            else:
+                logger.warning("qwen-character fix 插件：没有有效的 logit_bias 规则")
+                
+        except Exception as e:
+            logger.error(f"qwen-character fix 插件：应用 logit_bias 失败：{e}", exc_info=True)
 
     def _truncate_text(self, text: str, max_length: int) -> str:
         """

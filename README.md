@@ -1,6 +1,76 @@
 # AstrBot Plugin: Qwen Character Fix
 
-修复 qwen-flash-character 和 qwen-plus-character 模型 content 字段类型不匹配问题，并支持长期记忆和群聊场景。
+修复 qwen-flash-character 和 qwen-plus-character 模型 content 字段类型不匹配问题，并支持长期记忆、群聊场景和输出内容限制。
+
+## 🔥 v1.4.0 重大更新
+
+### 🌟 新增功能
+
+#### 3. **输出内容限制（Logit Bias）** 🚫
+
+**解决的问题**:
+- 模型有时会输出括号内的动作描述，例如：（朝你挥挥手）
+- 不希望模型使用某些特定词汇或表达方式
+- 需要控制模型的输出风格和格式
+
+**功能特性**:
+- ✅ 支持配置 token 出现概率（范围 -100 到 100）
+- ✅ 可在管理面板中可视化配置
+- ✅ 支持多条规则同时生效
+- ✅ 完全禁止或降低特定 token 的可能性
+- ✅ 适用于过滤动作描述、括号内容等
+
+**工作原理**:
+```json
+{
+  "logit_bias": {
+    "token_id_1": bias_value_1,
+    "token_id_2": bias_value_2,
+    ...
+  }
+}
+```
+
+- `bias_value = -100`: 完全禁止该 token 出现
+- `bias_value = -1`: 减少该 token 被选择的可能性
+- `bias_value = 0`: 无影响（默认）
+- `bias_value = 1`: 增加该 token 被选择的可能性
+- `bias_value = 100`: 强制只选择该 token（不建议，会导致循环输出）
+
+**配置示例**:
+```json
+{
+  "enable_logit_bias": true,
+  "logit_bias_config": [
+    {
+      "token_id": 1234,
+      "bias_value": -100,
+      "description": "禁止输出左括号（"
+    },
+    {
+      "token_id": 5678,
+      "bias_value": -100,
+      "description": "禁止输出右括号）"
+    },
+    {
+      "token_id": 9012,
+      "bias_value": -50,
+      "description": "减少动作描述词汇的使用"
+    }
+  ]
+}
+```
+
+**如何获取 Token ID**:
+- 下载阿里云提供的 [logit_bias_id 映射表.json](https://help-static-aliyun-doc.aliyuncs.com/file-manage-files/zh-CN/20250908/xtsxix/logit_bias_id%E6%98%A0%E5%B0%84%E8%A1%A8.json)
+- 查找需要限制的 token 对应的 ID
+- 在插件配置中添加规则
+
+**使用场景**:
+1. **过滤动作描述**: 禁止输出括号内的动作描述
+2. **规范输出格式**: 禁止使用某些标点符号或格式
+3. **风格控制**: 减少口语化表达的使用
+4. **专业场景**: 禁止使用非正式词汇
 
 ## 🔥 v1.3.0 重大更新
 
@@ -70,6 +140,49 @@ messages = [
 
 ### ⚙️ 新增配置项
 
+#### 输出内容限制相关（v1.4.0）
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `enable_logit_bias` | bool | false | 是否启用 logit_bias 限制输出内容 |
+| `logit_bias_config` | array | [] | logit_bias 配置列表，每项包含 token_id、bias_value 和 description |
+
+##### logit_bias_config 数组元素结构
+
+每个配置项包含以下字段：
+
+| 字段 | 类型 | 必填 | 范围 | 说明 |
+|------|------|------|------|------|
+| `token_id` | int | 是 | - | Token 对应的 ID（需从映射表查询） |
+| `bias_value` | int | 是 | [-100, 100] | Token 出现概率的调整值 |
+| `description` | string | 否 | - | 备注说明，用于标识该规则的用途 |
+
+##### bias_value 取值说明
+
+| 值 | 效果 | 使用场景 |
+|----|------|----------|
+| `-100` | 完全禁止 | 绝对不允许出现的 token（如括号、动作描述） |
+| `-50 ~ -1` | 减少可能性 | 不推荐但可接受的 token |
+| `0` | 无影响 | 默认值（通常不需要配置） |
+| `1 ~ 50` | 增加可能性 | 推荐使用的表达方式 |
+| `51 ~ 99` | 大幅增加可能性 | 强烈推荐的表达方式 |
+| `100` | 强制选择 | ❌ 不建议使用，会导致循环输出 |
+
+##### 常用 Token ID 参考
+
+根据阿里云提供的映射表，以下是一些常用的 token ID：
+
+``json
+{
+  "左括号（": 1234,    // 示例 ID，实际请查映射表
+  "右括号（）": 5678,    // 示例 ID，实际请查映射表
+  "冒号（:）": 9012,    // 示例 ID，实际请查映射表
+  ...
+}
+```
+
+**重要**: 以上仅为示例，实际 ID 请下载官方映射表查询。
+
 #### 长期记忆相关
 
 | 配置项 | 类型 | 默认值 | 说明 |
@@ -85,6 +198,61 @@ messages = [
 | `enable_group_chat` | bool | false | 是否启用群聊模式 |
 | `character_name` | string | "" | 群聊中的角色名称（启用群聊时必填） |
 | `partial_response` | bool | true | 是否启用 partial 回复模式 |
+
+#### 输出限制配置（v1.4.0+）
+
+- **enable_logit_bias**: 启用 logit_bias 功能，限制模型输出特定内容
+  - 默认 `false`：不启用
+  - 设置为 `true` 时需要在 `logit_bias_config` 中配置具体规则
+  
+- **logit_bias_config**: logit_bias 配置列表，数组格式
+  - 默认 `[]`：空数组
+  - 每项包含三个字段：
+    - `token_id` (int): Token 对应的 ID（从官方映射表查询）
+    - `bias_value` (int): 概率调整值，范围 `[-100, 100]`
+      - `-100`: 完全禁止该 token 出现
+      - `-1 ~ -99`: 减少出现的可能性
+      - `0`: 无影响（默认）
+      - `1 ~ 99`: 增加出现的可能性
+      - `100`: 强制只选择该 token（❌ 不建议，会导致循环输出）
+    - `description` (string): 备注说明（可选）
+  
+**使用示例**:
+
+``json
+{
+  "enable_logit_bias": true,
+  "logit_bias_config": [
+    {
+      "token_id": 1234,  // 替换为实际的左括号 token ID
+      "bias_value": -100,
+      "description": "禁止输出左括号（"
+    },
+    {
+      "token_id": 5678,  // 替换为实际的右括号 token ID
+      "bias_value": -100,
+      "description": "禁止输出右括号）"
+    },
+    {
+      "token_id": 9012,  // 替换为实际的动作描述 token ID
+      "bias_value": -50,
+      "description": "减少动作描述词汇的使用"
+    }
+  ]
+}
+```
+
+**如何获取 Token ID**:
+
+1. 下载阿里云官方提供的 [logit_bias_id 映射表.json](https://help-static-aliyun-doc.aliyuncs.com/file-manage-files/zh-CN/20250908/xtsxix/logit_bias_id%E6%98%A0%E5%B0%84%E8%A1%A8.json)
+2. 在映射表中查找需要限制的字符或词汇对应的 ID
+3. 将 ID 填入配置的 `token_id` 字段
+
+**注意事项**:
+- 建议优先使用 `-100` 来完全禁止某些字符（如括号）
+- 对于不希望出现但非绝对禁止的词汇，使用 `-50 ~ -1` 的范围
+- 避免使用 `100`，这会导致模型循环输出同一个 token
+- 可以配置多条规则，同时限制多个 token
 
 ### 🔧 技术实现
 
@@ -237,6 +405,21 @@ AI：要不要一起去买蓝莓？我记得你最喜欢这个
     "enable_long_term_memory": true,
     "memory_entries": 30,
     "skip_save_types": ["output"]  // 不保存模型输出，节省空间
+    
+    // v1.4.0: 限制输出动作描述
+    "enable_logit_bias": true,
+    "logit_bias_config": [
+      {
+        "token_id": 1234,  // 左括号（的 ID，需查映射表
+        "bias_value": -100,
+        "description": "禁止输出左括号"
+      },
+      {
+        "token_id": 5678,  // 右括号）的 ID，需查映射表
+        "bias_value": -100,
+        "description": "禁止输出右括号"
+      }
+    ]
   }
 }
 ```
@@ -290,7 +473,7 @@ Input error. Input should be a valid string: messages.content at index 1.
 
 在 AstrBot WebUI 的插件配置页面，可以调整以下参数：
 
-```json
+```
 {
   "qwen_fix_config": {
     "enable_auto_fix": true,              // 是否启用自动修复（默认 true）
@@ -310,6 +493,10 @@ Input error. Input should be a valid string: messages.content at index 1.
     "enable_group_chat": false,            // 是否启用群聊模式（默认 false）
     "character_name": "",                  // 群聊中的角色名称
     "partial_response": true               // 是否启用 partial 回复
+    
+    // v1.4.0 新增配置
+    "enable_logit_bias": false,            // 是否启用 logit_bias 限制输出（默认 false）
+    "logit_bias_config": []                // logit_bias 配置列表（见下方详细说明）
   }
 }
 ```
@@ -349,6 +536,61 @@ Input error. Input should be a valid string: messages.content at index 1.
 - **partial_response**: 启用 partial 回复模式（流式输出）
   - 推荐在群聊场景中开启
   - 提供更好的对话流畅性
+
+#### 输出限制配置（v1.4.0+）
+
+- **enable_logit_bias**: 启用 logit_bias 功能，限制模型输出特定内容
+  - 默认 `false`：不启用
+  - 设置为 `true` 时需要在 `logit_bias_config` 中配置具体规则
+  
+- **logit_bias_config**: logit_bias 配置列表，数组格式
+  - 默认 `[]`：空数组
+  - 每项包含三个字段：
+    - `token_id` (int): Token 对应的 ID（从官方映射表查询）
+    - `bias_value` (int): 概率调整值，范围 `[-100, 100]`
+      - `-100`: 完全禁止该 token 出现
+      - `-1 ~ -99`: 减少出现的可能性
+      - `0`: 无影响（默认）
+      - `1 ~ 99`: 增加出现的可能性
+      - `100`: 强制只选择该 token（❌ 不建议，会导致循环输出）
+    - `description` (string): 备注说明（可选）
+  
+**使用示例**:
+
+``json
+{
+  "enable_logit_bias": true,
+  "logit_bias_config": [
+    {
+      "token_id": 1234,  // 替换为实际的左括号 token ID
+      "bias_value": -100,
+      "description": "禁止输出左括号（"
+    },
+    {
+      "token_id": 5678,  // 替换为实际的右括号 token ID
+      "bias_value": -100,
+      "description": "禁止输出右括号）"
+    },
+    {
+      "token_id": 9012,  // 替换为实际的动作描述 token ID
+      "bias_value": -50,
+      "description": "减少动作描述词汇的使用"
+    }
+  ]
+}
+```
+
+**如何获取 Token ID**:
+
+1. 下载阿里云官方提供的 [logit_bias_id 映射表.json](https://help-static-aliyun-doc.aliyuncs.com/file-manage-files/zh-CN/20250908/xtsxix/logit_bias_id%E6%98%A0%E5%B0%84%E8%A1%A8.json)
+2. 在映射表中查找需要限制的字符或词汇对应的 ID
+3. 将 ID 填入配置的 `token_id` 字段
+
+**注意事项**:
+- 建议优先使用 `-100` 来完全禁止某些字符（如括号）
+- 对于不希望出现但非绝对禁止的词汇，使用 `-50 ~ -1` 的范围
+- 避免使用 `100`，这会导致模型循环输出同一个 token
+- 可以配置多条规则，同时限制多个 token
 
 ### 智能识别机制
 
@@ -444,6 +686,39 @@ Range of input length should be [1, 32000]
 3. 优化输入内容，减少冗余信息
 4. **推荐**: 启用长期记忆功能支持超长对话
 
+#### 场景 6：如何过滤动作描述（括号内容）
+
+**需求**: 不希望模型输出类似"（朝你挥挥手）"这样的动作描述
+
+**解决方案**:
+1. 下载阿里云提供的 [logit_bias_id 映射表.json](https://help-static-aliyun-doc.aliyuncs.com/file-manage-files/zh-CN/20250908/xtsxix/logit_bias_id%E6%98%A0%E5%B0%84%E8%A1%A8.json)
+2. 查找左右括号对应的 token ID
+3. 在插件配置中添加 logit_bias 规则：
+
+```json
+{
+  "enable_logit_bias": true,
+  "logit_bias_config": [
+    {
+      "token_id": <左括号的 ID>,
+      "bias_value": -100,
+      "description": "禁止输出左括号"
+    },
+    {
+      "token_id": <右括号的 ID>,
+      "bias_value": -100,
+      "description": "禁止输出右括号"
+    }
+  ]
+}
+```
+
+4. 重启 AstrBot 或重新加载插件使配置生效
+
+**效果**: 模型将无法输出包含括号的文本，从而避免动作描述。
+
+**注意**: Token ID 需要从官方映射表中查询，不同字符的 ID 可能不同。
+
 ### 如何知道当前使用的是哪个模型？
 
 查看日志输出：
@@ -465,6 +740,20 @@ Range of input length should be [1, 32000]
 如果看到这些信息，说明长期记忆功能已正常启用。
 
 ## 📝 更新日志
+
+### v1.4.0 (2026-03-15) - 支持输出内容限制（Logit Bias）
+
+- ✨ **logit_bias 功能**: 支持配置 token 出现概率，限制模型输出特定内容
+- 🎯 **管理面板配置**: 可在 AstrBot WebUI 中可视化配置 logit_bias 规则
+- ⚙️ **灵活的偏置控制**: 支持 [-100, 100] 范围的值，从完全禁止到强制选择
+- 🛠️ **新增配置项**: 
+  - `enable_logit_bias`: 启用 logit_bias 功能
+  - `logit_bias_config`: logit_bias 规则列表（包含 token_id、bias_value、description）
+- 📊 **应用场景**: 
+  - 过滤动作描述（括号内容）
+  - 规范输出格式
+  - 控制输出风格
+- 📝 **增强日志**: 记录 logit_bias 规则的应用情况
 
 ### v1.3.0 (2026-03-14) - 支持长期记忆和群聊场景
 
@@ -567,6 +856,6 @@ A: 会的。系统会自动清除 365 天内未使用的会话。如需长期保
 
 ---
 
-**最后更新**: 2026-03-14  
-**当前版本**: v1.3.0  
+**最后更新**: 2026-03-15  
+**当前版本**: v1.4.0  
 **参考文档**: 阿里云百炼 Qwen-Character 官方文档
