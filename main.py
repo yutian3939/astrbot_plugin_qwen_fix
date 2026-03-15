@@ -8,6 +8,11 @@ API 会返回错误："Input error. Input should be a valid string: messages.con
 解决方案:
 在 LLM 请求前，通过 on_llm_request 钩子检查并转换 content 字段为字符串。
 
+v1.4.2 修复:
+- 修复长度检查逻辑，现在会正确计算 contexts 中所有消息的总长度
+- 智能移除最早的历史消息以控制总输入长度在限制范围内
+- 优先保留完整的 prompt，仅在必要时截断
+
 v1.4.1 新增功能:
 - 添加禁用动作描述快捷开关（一键禁止括号内容输出）
 - 自动配置 logit_bias 禁止输出括号及相关符号
@@ -77,7 +82,7 @@ class Main(star.Star):
         # Session ID 管理（用于长期记忆）
         self._session_ids: Dict[str, str] = {}
         
-        logger.info("qwen-flash-character fix 插件已加载 (v1.4.1)")
+        logger.info("qwen-flash-character fix 插件已加载 (v1.4.2)")
         if self.enable_auto_fix:
             logger.info(f"自动修复功能已启用 (flash 限制：{self.max_input_length_flash}, plus 限制：{self.max_input_length_plus})")
         else:
@@ -211,22 +216,80 @@ class Main(star.Star):
                     req.extra_user_content_parts = []
                     logger.info("qwen-character fix 插件：已清空 extra_user_content_parts")
 
-            # 3. 新增：检查并控制总长度
+            # 3. 关键：检查并控制总长度（包括 contexts 和 prompt）
+            total_length = 0
+            
+            # 计算 contexts 中所有 content 的长度
+            if req.contexts:
+                for message in req.contexts:
+                    if isinstance(message, dict):
+                        content = message.get("content", "")
+                        total_length += len(content) if isinstance(content, str) else 0
+                    elif hasattr(message, 'content'):
+                        content = getattr(message, 'content', "")
+                        total_length += len(content) if isinstance(content, str) else 0
+            
+            # 加上 prompt 的长度
             if req.prompt:
-                prompt_length = len(req.prompt)
-                logger.info(f"qwen-character fix 插件：当前 prompt 长度={prompt_length}")
+                total_length += len(req.prompt)
+            
+            logger.info(f"qwen-character fix 插件：当前总输入长度={total_length} (contexts + prompt)")
+            
+            # 检查是否超过限制
+            if total_length > max_length:
+                logger.warning(
+                    f"qwen-character fix 插件：总输入长度 ({total_length}) 超过限制 ({max_length})，"
+                    f"将进行截断处理"
+                )
                 
-                if prompt_length > max_length:
-                    logger.warning(
-                        f"qwen-character fix 插件：prompt 长度 ({prompt_length}) 超过限制 ({max_length})，"
-                        f"将进行截断处理"
-                    )
-                    req.prompt = self._truncate_text(req.prompt, max_length)
+                # 优先截断 contexts，保留完整的 prompt
+                if req.contexts and len(req.contexts) > 1:
+                    # 计算需要删除多少条历史消息
+                    estimated_avg_length = total_length // len(req.contexts)
+                    messages_to_remove = max(1, (total_length - max_length) // estimated_avg_length)
+                    
                     logger.info(
-                        f"qwen-character fix 插件：prompt 已截断至 {len(req.prompt)} 字符，"
-                        f"使用策略：{self.truncate_strategy}"
+                        f"qwen-character fix 插件：将移除最早的 {messages_to_remove} 条历史消息"
                     )
-
+                    
+                    # 移除最早的消息（保留最新的）
+                    removed_count = 0
+                    while removed_count < messages_to_remove and len(req.contexts) > 1:
+                        req.contexts.pop(0)
+                        removed_count += 1
+                    
+                    # 重新计算长度
+                    total_length = 0
+                    for message in req.contexts:
+                        if isinstance(message, dict):
+                            content = message.get("content", "")
+                            total_length += len(content) if isinstance(content, str) else 0
+                        elif hasattr(message, 'content'):
+                            content = getattr(message, 'content', "")
+                            total_length += len(content) if isinstance(content, str) else 0
+                    if req.prompt:
+                        total_length += len(req.prompt)
+                    
+                    logger.info(
+                        f"qwen-character fix 插件：已移除 {removed_count} 条历史消息，"
+                        f"当前总长度={total_length}"
+                    )
+                
+                # 如果 contexts 已经无法再删减，则截断 prompt
+                if total_length > max_length and req.prompt:
+                    remaining_allowed = max_length - (total_length - len(req.prompt))
+                    if remaining_allowed > 0:
+                        logger.info(
+                            f"qwen-character fix 插件：将截断 prompt 从 {len(req.prompt)} 到 {remaining_allowed} 字符"
+                        )
+                        req.prompt = self._truncate_text(req.prompt, remaining_allowed)
+                    else:
+                        # 极端情况：prompt 也需要完全舍弃
+                        logger.warning(
+                            f"qwen-character fix 插件：上下文过长，将清空 prompt"
+                        )
+                        req.prompt = ""
+            
             # 4. v1.3.0 新增：准备长期记忆和群聊配置
             # 注：实际配置需要通过 SDK 的 extra_body 传入，此处做预处理
             if self.enable_long_term_memory or self.enable_group_chat:

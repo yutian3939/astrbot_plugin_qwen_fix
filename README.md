@@ -2,6 +2,58 @@
 
 修复 qwen-flash-character 和 qwen-plus-character 模型 content 字段类型不匹配问题，并支持长期记忆、群聊场景和输出内容限制。
 
+## 🔥 v1.4.2 重大修复
+
+### 🐛 修复内容
+
+#### **修复输入长度检查逻辑** ⚡
+
+**问题描述**:
+- v1.4.1 及之前版本只检查了 `req.prompt` 的长度
+- 没有计算 `req.contexts` 中所有历史消息的 content 长度
+- 导致实际输入总长度超过 API 限制（8000/32000 Token）
+- API 报错：`Range of input length should be [1, 8000]`
+
+**修复方案**:
+- ✅ 现在会正确计算 `contexts + prompt` 的总长度
+- ✅ 智能移除最早的历史消息以控制总长度
+- ✅ 优先保留完整的 prompt（当前查询）
+- ✅ 仅在必要时截断 prompt 内容
+- ✅ 详细的日志记录，方便排查问题
+
+**工作原理**:
+```python
+# 1. 计算所有 contexts 的长度
+total_length = sum(len(message.content) for message in req.contexts)
+
+# 2. 加上 prompt 的长度
+total_length += len(req.prompt)
+
+# 3. 如果超限，优先删除最早的 context
+while total_length > max_length and len(req.contexts) > 1:
+    req.contexts.pop(0)  # 移除最早的消息
+    # 重新计算总长度
+
+# 4. 如果 contexts 无法再删减，则截断 prompt
+if total_length > max_length:
+    req.prompt = truncate(req.prompt, remaining_length)
+```
+
+**日志示例**:
+```
+[INFO]: qwen-character fix 插件：当前总输入长度=9523 (contexts + prompt)
+[WARN]: qwen-character fix 插件：总输入长度 (9523) 超过限制 (7500)，将进行截断处理
+[INFO]: qwen-character fix 插件：将移除最早的 2 条历史消息
+[INFO]: qwen-character fix 插件：已移除 2 条历史消息，当前总长度=7234
+```
+
+**影响范围**:
+- 仅影响输入长度超限的场景
+- 对正常长度的对话无影响
+- 显著提升超长对话场景的成功率
+
+---
+
 ## 🔥 v1.4.1 重大更新
 
 ### 🌟 新增功能
