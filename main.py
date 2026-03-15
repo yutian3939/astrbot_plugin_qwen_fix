@@ -8,6 +8,11 @@ API 会返回错误："Input error. Input should be a valid string: messages.con
 解决方案:
 在 LLM 请求前，通过 on_llm_request 钩子检查并转换 content 字段为字符串。
 
+v1.4.1 新增功能:
+- 添加禁用动作描述快捷开关（一键禁止括号内容输出）
+- 自动配置 logit_bias 禁止输出括号及相关符号
+- 无需手动查找 Token ID，开箱即用
+
 v1.4.0 新增功能:
 - 支持 logit_bias 参数配置（限制模型输出特定内容）
 - 可在管理面板中配置 token 限制规则
@@ -66,7 +71,7 @@ class Main(star.Star):
         self.enable_logit_bias = plugin_config.get("enable_logit_bias", False)
         self.logit_bias_config = plugin_config.get("logit_bias_config", [])
         
-        # v1.4.1 新增：快速开关 - 禁止括号动作描述
+        # v1.4.1 新增：禁用动作描述快捷开关
         self.disable_action_description = plugin_config.get("disable_action_description", False)
         
         # Session ID 管理（用于长期记忆）
@@ -93,7 +98,7 @@ class Main(star.Star):
                 logger.info(f"  规则 {idx+1}: token_id={token_id}, bias={bias_value}, 说明={desc}")
         
         if self.disable_action_description:
-            logger.info("禁止括号动作描述功能已启用（自动配置左右括号 logit_bias=-100）")
+            logger.info("已启用禁用动作描述快捷开关（自动禁止输出括号内容）")
 
     @filter.on_llm_request(priority=100)  # 高优先级，确保在其他钩子之前执行
     async def fix_qwen_content(
@@ -231,6 +236,10 @@ class Main(star.Star):
             if self.enable_logit_bias and self.logit_bias_config:
                 self._apply_logit_bias(req)
             
+            # 6. v1.4.1 新增：应用禁用动作描述的快捷开关
+            if self.disable_action_description:
+                self._apply_disable_action_description(req)
+            
             logger.info("qwen-character content 字段预处理完成")
 
         except Exception as e:
@@ -299,63 +308,31 @@ class Main(star.Star):
             req: 请求对象
         """
         try:
+            if not self.logit_bias_config:
+                logger.debug("qwen-character fix 插件：logit_bias 配置为空，跳过")
+                return
+            
+            # 构建 logit_bias 字典
             logit_bias_dict = {}
-            
-            # 1. 处理自定义 logit_bias_config 配置
-            if self.logit_bias_config:
-                for config in self.logit_bias_config:
-                    token_id = config.get("token_id")
-                    bias_value = config.get("bias_value")
-                    desc = config.get("description", "")
+            for config in self.logit_bias_config:
+                token_id = config.get("token_id")
+                bias_value = config.get("bias_value")
+                desc = config.get("description", "")
+                
+                if token_id is not None and bias_value is not None:
+                    # 验证 bias_value 范围
+                    if bias_value < -100 or bias_value > 100:
+                        logger.warning(
+                            f"qwen-character fix 插件：logit_bias 值超出范围 [{bias_value}], "
+                            f"已自动修正为最接近的有效值"
+                        )
+                        bias_value = max(-100, min(100, bias_value))
                     
-                    if token_id is not None and bias_value is not None:
-                        # 验证 bias_value 范围
-                        if bias_value < -100 or bias_value > 100:
-                            logger.warning(
-                                f"qwen-character fix 插件：logit_bias 值超出范围 [{bias_value}], "
-                                f"已自动修正为最接近的有效值"
-                            )
-                            bias_value = max(-100, min(100, bias_value))
-                        
-                        logit_bias_dict[str(token_id)] = bias_value
-                        logger.debug(
-                            f"qwen-character fix 插件：添加 logit_bias 规则 - "
-                            f"token_id={token_id}, bias={bias_value}, 说明={desc}"
-                        )
-            
-            # 2. v1.4.1 新增：如果启用了禁止括号动作描述，自动注入左右括号的 logit_bias
-            # 注：以下是常见的左右括号 Unicode 编码对应的 token ID 示例
-            # 实际使用时需要根据模型 tokenizer 的具体映射关系确定
-            # 这里提供的是常见中文括号的 Unicode 码点，实际 token_id 需查映射表
-            # 常见括号 token ID 参考（需要验证）：
-            if self.disable_action_description:
-                # 左括号 (（Unicode: U+FF08) - 完全禁止
-                # 右括号） (Unicode: U+FF09) - 完全禁止
-                left_parenthesis_ids = [26, 87]  # 可能的左括号 token ID 示例
-                right_parenthesis_ids = [27, 88]  # 可能的右括号 token ID 示例
-                
-                # 尝试注入左括号限制
-                for token_id in left_parenthesis_ids:
-                    if str(token_id) not in logit_bias_dict:
-                        logit_bias_dict[str(token_id)] = -100
-                        logger.debug(
-                            f"qwen-character fix 插件：自动添加左括号限制 - "
-                            f"token_id={token_id}, bias=-100 (禁止动作描述)"
-                        )
-                
-                # 尝试注入右括号限制
-                for token_id in right_parenthesis_ids:
-                    if str(token_id) not in logit_bias_dict:
-                        logit_bias_dict[str(token_id)] = -100
-                        logger.debug(
-                            f"qwen-character fix 插件：自动添加右括号限制 - "
-                            f"token_id={token_id}, bias=-100 (禁止动作描述)"
-                        )
-                
-                logger.info(
-                    f"qwen-character fix 插件：已启用禁止括号动作描述，"
-                    f"共配置 {len(logit_bias_dict)} 条 logit_bias 规则"
-                )
+                    logit_bias_dict[str(token_id)] = bias_value
+                    logger.debug(
+                        f"qwen-character fix 插件：添加 logit_bias 规则 - "
+                        f"token_id={token_id}, bias={bias_value}, 说明={desc}"
+                    )
             
             if logit_bias_dict:
                 # 将 logit_bias 添加到 req.extra_body 中
@@ -374,6 +351,60 @@ class Main(star.Star):
                 
         except Exception as e:
             logger.error(f"qwen-character fix 插件：应用 logit_bias 失败：{e}", exc_info=True)
+
+    def _apply_disable_action_description(self, req: ProviderRequest) -> None:
+        """
+        应用禁用动作描述的快捷开关（禁止输出括号内容）
+        
+        根据阿里云官方文档示例，禁用常见括号相关的 Token ID
+        参考：https://help.aliyun.com/zh/model-studio/qwen-character
+        
+        Args:
+            req: 请求对象
+        """
+        try:
+            # 根据阿里云官方文档示例，这些是常见括号相关 Token 的 ID
+            # 左括号（、[、【 等
+            left_brackets = ["7", "7552", "320", "42344", "96899", "12832"]
+            # 右括号）、]、】等
+            right_brackets = ["8", "9909", "873", "58359", "6599", "10297", "91093"]
+            
+            # 构建 logit_bias 字典，将所有括号 Token 设为 -100（完全禁止）
+            logit_bias_dict = {}
+            
+            # 添加所有左括号
+            for token_id in left_brackets:
+                logit_bias_dict[token_id] = -100
+            
+            # 添加所有右括号
+            for token_id in right_brackets:
+                logit_bias_dict[token_id] = -100
+            
+            # 合并到现有的 logit_bias 配置中（如果有的话）
+            if not hasattr(req, 'extra_body') or req.extra_body is None:
+                req.extra_body = {}
+            
+            if 'logit_bias' in req.extra_body:
+                # 如果已经有 logit_bias 配置，合并进去
+                existing_bias = req.extra_body['logit_bias']
+                for token_id, bias_value in logit_bias_dict.items():
+                    if token_id not in existing_bias:
+                        existing_bias[token_id] = bias_value
+                req.extra_body['logit_bias'] = existing_bias
+                logger.info(
+                    f"qwen-character fix 插件：已添加 {len(logit_bias_dict)} 条括号禁用规则 "
+                    f"(与自定义 logit_bias 合并)"
+                )
+            else:
+                # 直接设置
+                req.extra_body['logit_bias'] = logit_bias_dict
+                logger.info(
+                    f"qwen-character fix 插件：已启用禁用动作描述模式，"
+                    f"禁止输出 {len(logit_bias_dict)} 种括号相关 Token"
+                )
+                
+        except Exception as e:
+            logger.error(f"qwen-character fix 插件：应用禁用动作描述失败：{e}", exc_info=True)
 
     def _truncate_text(self, text: str, max_length: int) -> str:
         """
