@@ -8,6 +8,13 @@ API 会返回错误："Input error. Input should be a valid string: messages.con
 解决方案:
 在 LLM 请求前，通过 on_llm_request 钩子检查并转换 content 字段为字符串。
 
+v1.4.3 重大修复:
+- 彻底修复长度检查逻辑，调整处理顺序确保计算准确性
+- 先转换所有 content 字段（contexts + extra_user_content_parts）
+- 然后计算总长度（contexts 所有 content + prompt）
+- 实现智能截断策略：优先移除最早历史消息，必要时截断 prompt
+- 使用统一的_calculate_total_length() 方法确保长度计算准确
+
 v1.4.2 修复:
 - 修复长度检查逻辑，现在会正确计算 contexts 中所有消息的总长度
 - 智能移除最早的历史消息以控制总输入长度在限制范围内
@@ -19,7 +26,7 @@ v1.4.1 新增功能:
 - 无需手动查找 Token ID，开箱即用
 
 v1.4.0 新增功能:
-- 支持 logit_bias 参数配置（限制模型输出特定内容）
+- 支持 logit_bias 参数配置（限制模型输出内容）
 - 可在管理面板中配置 token 限制规则
 - 支持设置 Token 出现概率（-100 到 100）
 - 适用于过滤动作描述、括号内容等
@@ -31,7 +38,7 @@ v1.3.0 新增功能:
 - 智能上下文截断策略
 
 作者：Assistant
-版本：1.4.1
+版本：1.4.3
 """
 
 from typing import Any, Dict, List
@@ -82,7 +89,7 @@ class Main(star.Star):
         # Session ID 管理（用于长期记忆）
         self._session_ids: Dict[str, str] = {}
         
-        logger.info("qwen-flash-character fix 插件已加载 (v1.4.2)")
+        logger.info("qwen-flash-character fix 插件已加载 (v1.4.3)")
         if self.enable_auto_fix:
             logger.info(f"自动修复功能已启用 (flash 限制：{self.max_input_length_flash}, plus 限制：{self.max_input_length_plus})")
         else:
@@ -145,7 +152,7 @@ class Main(star.Star):
 
             logger.info(f"检测到 qwen-character 系列模型 ({model_name})，开始处理 content 字段")
 
-            # 1. 处理 contexts 中的 content 字段
+            # === 第一步：转换 contexts 中的 list[ContentPart] 为字符串 ===
             if req.contexts:
                 logger.info(f"qwen-character fix 插件：处理 {len(req.contexts)} 条上下文消息")
                 for idx, message in enumerate(req.contexts):
@@ -165,9 +172,7 @@ class Main(star.Star):
                             setattr(message, 'content', new_content)
                             logger.info(f"qwen-character fix 插件：消息 {idx} 转换完成，结果长度={len(new_content)}")
 
-            # 2. 关键策略：处理 extra_user_content_parts
-            # 将它们转换为文本并拼接到 req.prompt，然后清空 extra_user_content_parts
-            # 这样 assemble_context 会因为 text 非空且 extra_user_content_parts 为空而返回简单格式
+            # === 第二步：转换 extra_user_content_parts 并合并到 prompt ===
             if req.extra_user_content_parts:
                 logger.info(f"qwen-character fix 插件：处理 {len(req.extra_user_content_parts)} 个额外内容块")
                 extra_texts = []
@@ -216,92 +221,38 @@ class Main(star.Star):
                     req.extra_user_content_parts = []
                     logger.info("qwen-character fix 插件：已清空 extra_user_content_parts")
 
-            # 3. 关键：检查并控制总长度（包括 contexts 和 prompt）
-            total_length = 0
-            
-            # 计算 contexts 中所有 content 的长度
-            if req.contexts:
-                for message in req.contexts:
-                    if isinstance(message, dict):
-                        content = message.get("content", "")
-                        total_length += len(content) if isinstance(content, str) else 0
-                    elif hasattr(message, 'content'):
-                        content = getattr(message, 'content', "")
-                        total_length += len(content) if isinstance(content, str) else 0
-            
-            # 加上 prompt 的长度
-            if req.prompt:
-                total_length += len(req.prompt)
-            
+            # === 第三步：关键 - 检查并控制总长度（包括 contexts 和 prompt）===
+            # 必须先计算总长度，然后进行截断
+            total_length = self._calculate_total_length(req)
             logger.info(f"qwen-character fix 插件：当前总输入长度={total_length} (contexts + prompt)")
             
             # 检查是否超过限制
             if total_length > max_length:
                 logger.warning(
                     f"qwen-character fix 插件：总输入长度 ({total_length}) 超过限制 ({max_length})，"
-                    f"将进行截断处理"
+                    f"将进行智能截断处理"
                 )
                 
-                # 优先截断 contexts，保留完整的 prompt
-                if req.contexts and len(req.contexts) > 1:
-                    # 计算需要删除多少条历史消息
-                    estimated_avg_length = total_length // len(req.contexts)
-                    messages_to_remove = max(1, (total_length - max_length) // estimated_avg_length)
-                    
-                    logger.info(
-                        f"qwen-character fix 插件：将移除最早的 {messages_to_remove} 条历史消息"
-                    )
-                    
-                    # 移除最早的消息（保留最新的）
-                    removed_count = 0
-                    while removed_count < messages_to_remove and len(req.contexts) > 1:
-                        req.contexts.pop(0)
-                        removed_count += 1
-                    
-                    # 重新计算长度
-                    total_length = 0
-                    for message in req.contexts:
-                        if isinstance(message, dict):
-                            content = message.get("content", "")
-                            total_length += len(content) if isinstance(content, str) else 0
-                        elif hasattr(message, 'content'):
-                            content = getattr(message, 'content', "")
-                            total_length += len(content) if isinstance(content, str) else 0
-                    if req.prompt:
-                        total_length += len(req.prompt)
-                    
-                    logger.info(
-                        f"qwen-character fix 插件：已移除 {removed_count} 条历史消息，"
-                        f"当前总长度={total_length}"
-                    )
+                # 执行智能截断策略
+                await self._smart_truncate(req, max_length)
                 
-                # 如果 contexts 已经无法再删减，则截断 prompt
-                if total_length > max_length and req.prompt:
-                    remaining_allowed = max_length - (total_length - len(req.prompt))
-                    if remaining_allowed > 0:
-                        logger.info(
-                            f"qwen-character fix 插件：将截断 prompt 从 {len(req.prompt)} 到 {remaining_allowed} 字符"
-                        )
-                        req.prompt = self._truncate_text(req.prompt, remaining_allowed)
-                    else:
-                        # 极端情况：prompt 也需要完全舍弃
-                        logger.warning(
-                            f"qwen-character fix 插件：上下文过长，将清空 prompt"
-                        )
-                        req.prompt = ""
+                # 重新计算截断后的长度
+                total_length = self._calculate_total_length(req)
+                logger.info(
+                    f"qwen-character fix 插件：截断完成，当前总长度={total_length}"
+                )
             
-            # 4. v1.3.0 新增：准备长期记忆和群聊配置
-            # 注：实际配置需要通过 SDK 的 extra_body 传入，此处做预处理
-            if self.enable_long_term_memory or self.enable_group_chat:
-                await self._prepare_character_options(event, req, model_name)
-            
-            # 5. v1.4.0 新增：应用 logit_bias 配置
+            # === 第四步：应用 logit_bias 配置 ===
             if self.enable_logit_bias and self.logit_bias_config:
                 self._apply_logit_bias(req)
             
-            # 6. v1.4.1 新增：应用禁用动作描述的快捷开关
+            # === 第五步：应用禁用动作描述的快捷开关 ===
             if self.disable_action_description:
                 self._apply_disable_action_description(req)
+            
+            # === 第六步：准备长期记忆和群聊配置 ===
+            if self.enable_long_term_memory or self.enable_group_chat:
+                await self._prepare_character_options(event, req, model_name)
             
             logger.info("qwen-character content 字段预处理完成")
 
@@ -309,6 +260,181 @@ class Main(star.Star):
             logger.error(f"qwen-character fix 插件处理失败：{e}", exc_info=True)
             # 不重新抛出异常，避免影响正常流程
             # 即使失败，也让请求继续执行
+
+    def _calculate_total_length(self, req: ProviderRequest) -> int:
+        """
+        计算总输入长度（contexts 所有 content + prompt）
+        
+        Args:
+            req: ProviderRequest 对象
+            
+        Returns:
+            总字符数
+        """
+        total_length = 0
+        
+        # 计算 contexts 中所有 content 的长度
+        if req.contexts:
+            for message in req.contexts:
+                if isinstance(message, dict):
+                    content = message.get("content", "")
+                    total_length += len(content) if isinstance(content, str) else 0
+                elif hasattr(message, 'content'):
+                    content = getattr(message, 'content', "")
+                    total_length += len(content) if isinstance(content, str) else 0
+        
+        # 加上 prompt 的长度
+        if req.prompt:
+            total_length += len(req.prompt)
+        
+        return total_length
+
+    async def _smart_truncate(self, req: ProviderRequest, max_length: int) -> None:
+        """
+        智能截断策略：优先移除最早的 context 消息（保留最新的对话）
+        
+        Args:
+            req: ProviderRequest 对象
+            max_length: 最大允许长度
+        """
+        # 策略 1：优先移除最早的 context 消息（保留最新的对话）
+        while req.contexts and len(req.contexts) > 1:
+            # 尝试移除第一条消息
+            removed_msg = req.contexts.pop(0)
+            current_length = self._calculate_total_length(req)
+            
+            logger.debug(
+                f"qwen-character fix 插件：移除 1 条历史消息，当前长度={current_length}"
+            )
+            
+            # 如果已经满足长度要求，停止删除
+            if current_length <= max_length:
+                logger.info(
+                    f"qwen-character fix 插件：通过移除历史消息完成截断，"
+                    f"剩余 {len(req.contexts)} 条上下文"
+                )
+                return
+        
+        # 策略 2：如果 contexts 无法再删减（只剩 1 条或为空），则截断 prompt
+        if req.prompt:
+            current_length = self._calculate_total_length(req)
+            remaining_for_prompt = max_length - (current_length - len(req.prompt))
+            
+            if remaining_for_prompt > 0:
+                logger.info(
+                    f"qwen-character fix 插件：将截断 prompt 从 {len(req.prompt)} 到 "
+                    f"{remaining_for_prompt} 字符"
+                )
+                req.prompt = self._truncate_text(req.prompt, remaining_for_prompt)
+            else:
+                # 极端情况：prompt 也需要完全舍弃
+                logger.warning(
+                    f"qwen-character fix 插件：上下文过长，将清空 prompt"
+                )
+                req.prompt = ""
+            
+            logger.info(
+                f"qwen-character fix 插件：通过截断 prompt 完成处理，"
+                f"最终长度={self._calculate_total_length(req)}"
+            )
+        else:
+            logger.warning(
+                f"qwen-character fix 插件：无法进一步截断，"
+                f"当前长度={self._calculate_total_length(req)} 仍超过限制"
+            )
+
+    def _truncate_text(self, text: str, max_length: int) -> str:
+        """
+        根据策略截断文本
+        
+        Args:
+            text: 原始文本
+            max_length: 最大长度
+            
+        Returns:
+            截断后的文本
+        """
+        if len(text) <= max_length:
+            return text
+            
+        if self.truncate_strategy == "tail":
+            # 保留头部
+            return text[:max_length] + "..."
+        elif self.truncate_strategy == "head":
+            # 保留尾部
+            return "..." + text[-(max_length-3):]
+        elif self.truncate_strategy == "middle":
+            # 保留头尾
+            head_len = max_length // 2
+            tail_len = max_length - head_len
+            return text[:head_len] + "..." + text[-tail_len:]
+        else:
+            # 默认截断尾部
+            return text[:max_length] + "..."
+
+    def _convert_part_to_text(self, part: dict) -> str:
+        """将字典格式的 ContentPart 转换为文本"""
+        parts = []
+        for key, value in part.items():
+            if isinstance(value, list):
+                # 递归处理列表
+                converted = self._convert_list_to_text(value)
+                parts.append(f"[{key}: {converted}]")
+            else:
+                parts.append(f"{key}: {value}")
+        return " ".join(parts)
+
+    def _convert_content_part_object(self, part: Any) -> str:
+        """将 ContentPart 对象转换为文本"""
+        if isinstance(part, TextPart):
+            return part.text if part.text else '[empty]'
+        elif hasattr(part, 'text'):
+            return getattr(part, 'text', '[unknown]')
+        else:
+            return f"[{type(part).__name__}]"
+
+    def _convert_list_to_text(self, content_list: list) -> str:
+        """
+        将 ContentPart 列表转换为文本字符串
+        
+        Args:
+            content_list: ContentPart 对象或字典的列表
+            
+        Returns:
+            转换后的文本字符串
+        """
+        text_parts = []
+        
+        for item in content_list:
+            if isinstance(item, dict):
+                # 处理字典格式的 ContentPart
+                if item.get("type") == "text":
+                    text_val = item.get("text", "")
+                    if text_val:
+                        text_parts.append(str(text_val))
+                elif item.get("type") == "think":
+                    # 跳过 think 部分
+                    continue
+                else:
+                    # 其他类型（如 image_url）转为占位符
+                    item_type = item.get("type", "unknown")
+                    text_parts.append(f"[{item_type}]")
+                    
+            elif isinstance(item, TextPart):
+                # 处理 TextPart 对象
+                if item.text:
+                    text_parts.append(item.text)
+                    
+            elif isinstance(item, ContentPart):
+                # 处理其他 ContentPart 子类
+                if hasattr(item, 'text') and getattr(item, 'text', None):
+                    text_parts.append(getattr(item, 'text'))
+                else:
+                    # 其他类型转为占位符
+                    item_type = type(item).__name__
+                    text_parts.append(f"[{item_type}]")
+        
+        return "".join(text_parts) if text_parts else " "
 
     async def _prepare_character_options(
         self, event: AstrMessageEvent, req: ProviderRequest, model_name: str
@@ -469,95 +595,3 @@ class Main(star.Star):
         except Exception as e:
             logger.error(f"qwen-character fix 插件：应用禁用动作描述失败：{e}", exc_info=True)
 
-    def _truncate_text(self, text: str, max_length: int) -> str:
-        """
-        根据策略截断文本
-        
-        Args:
-            text: 原始文本
-            max_length: 最大长度
-            
-        Returns:
-            截断后的文本
-        """
-        if len(text) <= max_length:
-            return text
-            
-        if self.truncate_strategy == "tail":
-            # 保留头部
-            return text[:max_length] + "..."
-        elif self.truncate_strategy == "head":
-            # 保留尾部
-            return "..." + text[-(max_length-3):]
-        elif self.truncate_strategy == "middle":
-            # 保留头尾
-            head_len = max_length // 2
-            tail_len = max_length - head_len
-            return text[:head_len] + "..." + text[-tail_len:]
-        else:
-            # 默认截断尾部
-            return text[:max_length] + "..."
-
-    def _convert_part_to_text(self, part: dict) -> str:
-        """将字典格式的 ContentPart 转换为文本"""
-        parts = []
-        for key, value in part.items():
-            if isinstance(value, list):
-                # 递归处理列表
-                converted = self._convert_list_to_text(value)
-                parts.append(f"[{key}: {converted}]")
-            else:
-                parts.append(f"{key}: {value}")
-        return " ".join(parts)
-
-    def _convert_content_part_object(self, part: Any) -> str:
-        """将 ContentPart 对象转换为文本"""
-        if isinstance(part, TextPart):
-            return part.text if part.text else '[empty]'
-        elif hasattr(part, 'text'):
-            return getattr(part, 'text', '[unknown]')
-        else:
-            return f"[{type(part).__name__}]"
-
-    def _convert_list_to_text(self, content_list: list) -> str:
-        """
-        将 ContentPart 列表转换为文本字符串
-        
-        Args:
-            content_list: ContentPart 对象或字典的列表
-            
-        Returns:
-            转换后的文本字符串
-        """
-        text_parts = []
-        
-        for item in content_list:
-            if isinstance(item, dict):
-                # 处理字典格式的 ContentPart
-                if item.get("type") == "text":
-                    text_val = item.get("text", "")
-                    if text_val:
-                        text_parts.append(str(text_val))
-                elif item.get("type") == "think":
-                    # 跳过 think 部分
-                    continue
-                else:
-                    # 其他类型（如 image_url）转为占位符
-                    item_type = item.get("type", "unknown")
-                    text_parts.append(f"[{item_type}]")
-                    
-            elif isinstance(item, TextPart):
-                # 处理 TextPart 对象
-                if item.text:
-                    text_parts.append(item.text)
-                    
-            elif isinstance(item, ContentPart):
-                # 处理其他 ContentPart 子类
-                if hasattr(item, 'text') and getattr(item, 'text', None):
-                    text_parts.append(getattr(item, 'text'))
-                else:
-                    # 其他类型转为占位符
-                    item_type = type(item).__name__
-                    text_parts.append(f"[{item_type}]")
-        
-        return "".join(text_parts) if text_parts else " "

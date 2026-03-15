@@ -2,6 +2,80 @@
 
 修复 qwen-flash-character 和 qwen-plus-character 模型 content 字段类型不匹配问题，并支持长期记忆、群聊场景和输出内容限制。
 
+## 🔥 v1.4.3 重大修复
+
+### 🐛 修复内容
+
+#### **彻底修复输入长度检查逻辑** ⚡
+
+**问题描述**:
+- v1.4.2 虽然计算了 `contexts + prompt` 的总长度，但**计算时机不对**
+- 在转换 `extra_user_content_parts` 之前就进行了长度计算
+- 导致 `req.prompt` 在计算时还未包含组装后的额外内容
+- 实际发送给 API 的长度仍然超过限制
+
+**根本原因**:
+```
+# 错误的时间线（v1.4.2）：
+1. 计算长度（此时 prompt 还未包含 extra_user_content_parts）
+2. 转换 extra_user_content_parts 并拼接到 prompt
+3. 发送请求 -> 超限！❌
+
+# 正确的时间线（v1.4.3）：
+1. 转换 contexts 中的 content 字段
+2. 转换 extra_user_content_parts 并拼接到 prompt
+3. 计算总长度（此时已包含所有内容）✅
+4. 如果超限，执行智能截断
+5. 发送请求 ✅
+```
+
+**修复方案**:
+- ✅ **调整处理顺序**：先转换所有 content 字段，再计算长度
+- ✅ **统一长度计算**：使用 `_calculate_total_length()` 方法确保准确性
+- ✅ **智能截断策略**：优先移除最早的 context，必要时截断 prompt
+- ✅ **详细日志**：记录每一步的处理结果
+
+**核心代码流程**:
+```
+# 第一步：转换 contexts 中的 list[ContentPart]
+for message in req.contexts:
+    if isinstance(message.content, list):
+        message.content = _convert_list_to_text(message.content)
+
+# 第二步：转换 extra_user_content_parts 并合并到 prompt
+if req.extra_user_content_parts:
+    extra_texts = convert(req.extra_user_content_parts)
+    req.prompt = (req.prompt or "") + " ".join(extra_texts)
+    req.extra_user_content_parts = []  # 清空，防止 assemble_context 重复处理
+
+# 第三步：计算总长度（关键！）
+total_length = _calculate_total_length(req)
+
+# 第四步：如果超限，执行智能截断
+if total_length > max_length:
+    await _smart_truncate(req, max_length)
+```
+
+**日志示例** (v1.4.3):
+```
+[INFO]: qwen-character fix 插件：处理 10 条上下文消息
+[INFO]: qwen-character fix 插件：转换消息 0 (dict 类型), content 长度=15
+[INFO]: qwen-character fix 插件：消息 0 转换完成，结果长度=128
+...
+[INFO]: qwen-character fix 插件：处理 3 个额外内容块
+[INFO]: qwen-character fix 插件：将额外内容合并到 prompt: [Image Attachment: path ...
+[INFO]: qwen-character fix 插件：已清空 extra_user_content_parts
+[INFO]: qwen-character fix 插件：当前总输入长度=9523 (contexts + prompt)
+[WARN]: qwen-character fix 插件：总输入长度 (9523) 超过限制 (7500)，将进行智能截断处理
+[INFO]: qwen-character fix 插件：通过移除历史消息完成截断，剩余 8 条上下文
+[INFO]: qwen-character fix 插件：截断完成，当前总长度=7234
+```
+
+**影响范围**:
+- 修复了带有多图片、文件附件等场景下的长度超限问题
+- 特别影响群聊场景（历史消息较多）和长对话场景
+- 确保在所有情况下都能准确控制输入长度
+
 ## 🔥 v1.4.2 重大修复
 
 ### 🐛 修复内容
@@ -72,7 +146,7 @@ if total_length > max_length:
 - ✅ 开箱即用，简单便捷
 
 **使用方法**:
-```json
+``json
 {
   "disable_action_description": true
 }
